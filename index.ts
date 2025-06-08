@@ -25,93 +25,29 @@ import { User } from "discord-types/general";
 
 const logger = new Logger("UserAffinities");
 
+interface AffinitiesV2 {
+    otherUserId: User["id"];
+    userSegment: "NON_MAU" | "NON_HFU_MAU" | "HFU_MAU";
+    otherUserSegment: "NON_MAU" | "NON_HFU_MAU" | "HFU_MAU";
+    // 0.15
+    isFriend: boolean;
+    // 0.30
+    dmProbability: number;
+    dmRank: number;
+    // 0.25
+    vcProbability: number;
+    vcRank: number;
+    // 0.20
+    serverMessageProbability: number;
+    serverMessageRank: number;
+    // 0.10
+    communicationProbability: number;
+    communicationRank: number;
+}
+
 interface Affinities {
-    user_id: User["id"];
+    user_id: User["id"],
     affinity: number;
-}
-
-// stolen from petpet, thanks vee
-function loadImage(source: File | string): Promise<HTMLImageElement> {
-    const isFile = source instanceof File;
-    const url = isFile ? URL.createObjectURL(source) : source;
-
-    return new Promise<HTMLImageElement>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-            if (isFile)
-                URL.revokeObjectURL(url);
-            resolve(img);
-        };
-        img.onerror = (event, _source, _lineno, _colno, err) => reject(err || event);
-        img.crossOrigin = "anonymous";
-        img.src = url;
-    });
-}
-
-function generateRandomPosition(existingPositions: Array<{ x: number, y: number, size: number; }>, canvasWidth: number, canvasHeight: number, size: number, attempts = 100): { x: number, y: number; } {
-    const padding = 40;
-    const textSpace = 50;
-
-    for (let i = 0; i < attempts; i++) {
-        const x = Math.random() * (canvasWidth - size - padding * 2) + padding;
-        const y = Math.random() * (canvasHeight - size - textSpace - padding * 2) + padding;
-
-        let collision = false;
-        // thanks random stackoverflow user for this
-        for (const pos of existingPositions) {
-            const centerX1 = x + size / 2;
-            const centerY1 = y + size / 2;
-            const centerX2 = pos.x + pos.size / 2;
-            const centerY2 = pos.y + pos.size / 2;
-
-            const distance = Math.sqrt(Math.pow(centerX1 - centerX2, 2) + Math.pow(centerY1 - centerY2, 2));
-            const minDistance = (size + pos.size) / 2 + padding;
-
-            if (distance < minDistance) {
-                collision = true;
-                break;
-            }
-        }
-
-        if (!collision) {
-            return { x, y };
-        }
-    }
-
-    const cols = Math.floor(canvasWidth / (size + padding));
-    const rows = Math.floor(canvasHeight / (size + textSpace + padding));
-    const totalSlots = cols * rows;
-
-    if (existingPositions.length < totalSlots) {
-        const index = existingPositions.length;
-        const col = index % cols;
-        const row = Math.floor(index / cols);
-
-        return {
-            x: col * (size + padding) + padding,
-            y: row * (size + textSpace + padding) + padding
-        };
-    }
-
-    return {
-        x: Math.random() * (canvasWidth - size - padding * 2) + padding,
-        y: Math.random() * (canvasHeight - size - textSpace - padding * 2) + padding
-    };
-}
-
-function calculateCanvasSize(userCount: number, avatarSize: number): { width: number, height: number; } {
-    const padding = 40;
-    const textSpace = 50;
-    const itemWidth = avatarSize + padding;
-    const itemHeight = avatarSize + textSpace + padding;
-
-    const cols = Math.ceil(Math.sqrt(userCount * 1.5));
-    const rows = Math.ceil(userCount / cols);
-
-    const width = Math.max(800, cols * itemWidth + padding);
-    const height = Math.max(600, rows * itemHeight + padding);
-
-    return { width, height };
 }
 
 export default definePlugin({
@@ -123,7 +59,6 @@ export default definePlugin({
             id: 428188716641812481n
         }
     ],
-    required: true,
     commands: [
         {
             inputType: ApplicationCommandInputType.BUILT_IN,
@@ -134,41 +69,46 @@ export default definePlugin({
                     name: "count",
                     description: "The amount of users to display",
                     type: ApplicationCommandOptionType.NUMBER
+                },
+                {
+                    name: "algorithm",
+                    description: "Use the old algorithm (v1) to calculate the affinity",
+                    type: ApplicationCommandOptionType.BOOLEAN
                 }
             ],
             execute: async (opts, cmdCtx) => {
                 const count = findOption(opts, "count", 25);
+                const useV1 = findOption(opts, "calculate", false);
 
                 try {
-                    const affinities: Affinities[] = findStore("UserAffinitiesStore").getUserAffinities();
+                    const affinities: AffinitiesV2[] | Affinities[] = useV1 ? findStore("UserAffinitiesStore").getUserAffinities() : findStore("UserAffinitiesV2Store").getUserAffinities();
 
                     if (!affinities || affinities.length === 0) {
-                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your privacy settings" });
+                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)." });
                     }
 
                     let users = affinities.map(e => {
-                        const user = UserStore.getUser(e.user_id);
+                        const user = UserStore.getUser(useV1 ? e.user_id : e.otherUserId);
+                        const affinity = useV1 ? e.affinity : calculateAffinityScore(e);
                         return {
                             member: user,
-                            affinity: e.affinity,
+                            affinity,
                         };
-                    }).filter(Boolean);
+                    }).filter(x => x.member?.id);
 
                     if (users.length === 0) {
-                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your privacy settings" });
+                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)." });
                     }
 
                     users = users
                         .sort((a, b) => b.affinity - a.affinity)
                         .slice(0, count);
 
-                    const totalAffinity = users.reduce((sum, user) => sum + user.affinity, 0);
+                    const minAffinity = Math.min(...users.map(u => u.affinity));
+                    const maxAffinity = Math.max(...users.map(u => u.affinity));
 
-                    const affs = users.map(u => u.affinity);
-                    const minAffinity = Math.min(...affs);
-                    const maxAffinity = Math.max(...affs);
-                    const minSize = 100;
-                    const maxSize = 180;
+                    const minSize = 80;
+                    const maxSize = 160;
 
                     function getSize(affinity: number): number {
                         if (maxAffinity === minAffinity) return (minSize + maxSize) / 2;
@@ -176,6 +116,7 @@ export default definePlugin({
                     }
 
                     const avgSize = (minSize + maxSize) / 2;
+                    logger.log(`${users.length}, ${users.map(x => x.member.username)}`);
                     const { width: canvasWidth, height: canvasHeight } = calculateCanvasSize(users.length, avgSize);
 
                     const canvas = document.createElement("canvas");
@@ -183,12 +124,10 @@ export default definePlugin({
                     canvas.height = canvasHeight;
                     const ctx = canvas.getContext("2d")!;
 
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
                     const positions: Array<{ x: number, y: number, size: number; }> = [];
                     const userPositions = users.map(user => {
                         const size = getSize(user.affinity);
-                        const pos = generateRandomPosition(positions, canvasWidth, canvasHeight, size);
+                        const pos = generatePoissonDiskPosition(positions, canvasWidth, canvasHeight, size);
                         positions.push({ x: pos.x, y: pos.y, size });
                         return {
                             ...user,
@@ -209,48 +148,28 @@ export default definePlugin({
 
                             const img = await loadImage(avatarUrl);
 
+                            const centerX = user.x + user.size / 2;
+                            const centerY = user.y + user.size / 2;
+
                             ctx.save();
                             ctx.beginPath();
-                            ctx.arc(user.x + user.size / 2, user.y + user.size / 2, user.size / 2, 0, Math.PI * 2);
+                            ctx.arc(centerX, centerY, user.size / 2, 0, Math.PI * 2);
                             ctx.clip();
                             ctx.drawImage(img, user.x, user.y, user.size, user.size);
                             ctx.restore();
 
-                            const hue = (users.indexOf(user) / users.length) * 240;
-                            ctx.strokeStyle = `hsl(${240 - hue}, 70%, 60%)`;
-                            ctx.lineWidth = 4;
+                            const hue = (users.indexOf(user) / users.length) * 300;
+                            ctx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
+                            ctx.lineWidth = 3;
                             ctx.beginPath();
-                            ctx.arc(user.x + user.size / 2, user.y + user.size / 2, user.size / 2, 0, Math.PI * 2);
+                            ctx.arc(centerX, centerY, user.size / 2 + 1, 0, Math.PI * 2);
                             ctx.stroke();
-
-                            const username = user.member.username.length > 15 ? user.member.username.substring(0, 15) + "..." : user.member.username;
-                            const percentage = ((user.affinity / totalAffinity) * 100).toFixed(1);
-
-                            const textX = user.x + user.size / 2;
-                            const textY = user.y + user.size + 25;
-
-                            ctx.font = "bold 14px Arial";
-                            ctx.textAlign = "center";
-
-                            ctx.fillStyle = "#ffffff";
-                            ctx.fillText(username, textX, textY);
-
-                            ctx.font = "16px Arial";
-                            const percentY = textY + 18;
-
-                            ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
-                            ctx.fillText(`${percentage}%`, textX + 1, percentY + 1);
-
-                            ctx.fillStyle = `hsl(${240 - hue}, 70%, 80%)`;
-                            ctx.fillText(`${percentage}%`, textX, percentY);
 
                             loadedImages++;
 
                             if (loadedImages === totalImages) {
-                                ctx.fillStyle = "#7289da";
-
                                 canvas.toBlob(blob => {
-                                    if (!blob) return;
+                                    if (!blob) return sendBotMessage(cmdCtx.channel.id, { content: "Couldn't generate the image :c" });
                                     const file = new File([blob], "affinities-cloud.png", { type: "image/png" });
                                     UploadHandler.promptToUpload([file], cmdCtx.channel, DraftType.ChannelMessage);
                                 }, "image/png");
@@ -285,3 +204,120 @@ export default definePlugin({
         },
     ]
 });
+
+function calculateAffinityScore(affinity: AffinitiesV2): number {
+    const weights = {
+        friend: 0.15,
+        dm: 0.30,
+        vc: 0.25,
+        serverMsg: 0.20,
+        communication: 0.10
+    };
+
+    let score = 0;
+
+    if (affinity.isFriend) score += weights.friend * 100;
+    score += (affinity.dmProbability * weights.dm * 100);
+    score += (affinity.vcProbability * weights.vc * 100);
+    score += (affinity.serverMessageProbability * weights.serverMsg * 100);
+    score += (affinity.communicationProbability * weights.communication * 100);
+
+    score = Math.min(100, Math.max(0, score));
+    return Math.round(score * 100) / 100;
+}
+
+// stolen from petpet, thanks vee
+function loadImage(source: File | string): Promise<HTMLImageElement> {
+    const isFile = source instanceof File;
+    const url = isFile ? URL.createObjectURL(source) : source;
+
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            if (isFile)
+                URL.revokeObjectURL(url);
+            resolve(img);
+        };
+        img.onerror = (event, _source, _lineno, _colno, err) => reject(err || event);
+        img.crossOrigin = "anonymous";
+        img.src = url;
+    });
+}
+
+// stolen from random stackoverflow post that taught me how awful canvas ist
+function generatePoissonDiskPosition(
+    existingPositions: Array<{ x: number, y: number, size: number; }>,
+    canvasWidth: number,
+    canvasHeight: number,
+    size: number
+): { x: number, y: number; } {
+    const edgePadding = 10;
+    const minDist = size * 1.5;
+    const textSpace = 60;
+    const k = 30;
+
+    function isValid(x: number, y: number) {
+        if (
+            x < edgePadding + size / 2 ||
+            x > canvasWidth - edgePadding - size / 2 ||
+            y < edgePadding + size / 2 ||
+            y > canvasHeight - textSpace - edgePadding - size / 2
+        ) return false;
+        return !existingPositions.some(pos => {
+            const dx = pos.x - x;
+            const dy = pos.y - y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minAllowed = (pos.size + size) / 2 + (minDist - size);
+            return dist < minAllowed;
+        });
+    }
+
+    if (existingPositions.length === 0) {
+        return {
+            x: canvasWidth / 2 - size / 2,
+            y: canvasHeight / 2 - size / 2
+        };
+    }
+
+    for (let tries = 0; tries < 100; tries++) {
+        const base = existingPositions[Math.floor(Math.random() * existingPositions.length)];
+        for (let i = 0; i < k; i++) {
+            const angle = Math.random() * 2 * Math.PI;
+            const radius = minDist + Math.random() * minDist;
+            const x = base.x + Math.cos(angle) * radius;
+            const y = base.y + Math.sin(angle) * radius;
+            if (isValid(x, y)) {
+                return { x, y };
+            }
+        }
+    }
+
+    for (let tries = 0; tries < 100; tries++) {
+        const x = Math.random() * (canvasWidth - size - edgePadding * 2) + edgePadding + size / 2;
+        const y = Math.random() * (canvasHeight - size - textSpace - edgePadding * 2) + edgePadding + size / 2;
+        if (isValid(x, y)) {
+            return { x, y };
+        }
+    }
+
+    return {
+        x: edgePadding + size / 2,
+        y: edgePadding + size / 2
+    };
+}
+
+function calculateCanvasSize(userCount: number, avatarSize: number): { width: number, height: number; } {
+    const padding = 50;
+    const textSpace = 60;
+    const itemWidth = avatarSize + padding;
+    const itemHeight = avatarSize + textSpace + padding;
+
+    const aspectRatio = 16 / 9;
+    const cols = Math.ceil(Math.sqrt(userCount * aspectRatio));
+    const rows = Math.ceil(userCount / cols);
+
+    const width = Math.max(1000, cols * itemWidth + padding);
+    const height = Math.max(700, rows * itemHeight + padding);
+
+    return { width, height };
+}
