@@ -4,7 +4,7 @@ display your most interacted users in a word cloud!
 
 simply run the /affinities command after installing the plugin.
 
-to install it follow instructions on <https://vencord.dev>
+to install it follow instructions on <https://docs.vencord.dev>
 
 ![preview](Tj7XzDH.png)
 
