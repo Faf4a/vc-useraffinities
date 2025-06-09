@@ -10,7 +10,8 @@ or use the `algorithm` option to choose the 'algorithm', discord has two version
 
 to install it follow instructions on <https://docs.vencord.dev>
 
-![preview](Tj7XzDH.png)
+![small cloud](0jx26s9.png)
+![big cloud](ANLqFzQ.png)
 
 ## contributing
 

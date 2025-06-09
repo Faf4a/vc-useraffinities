@@ -29,30 +29,33 @@ interface AffinitiesV2 {
     otherUserId: User["id"];
     userSegment: "NON_MAU" | "NON_HFU_MAU" | "HFU_MAU";
     otherUserSegment: "NON_MAU" | "NON_HFU_MAU" | "HFU_MAU";
-    // 0.15
     isFriend: boolean;
-    // 0.30
     dmProbability: number;
     dmRank: number;
-    // 0.25
     vcProbability: number;
     vcRank: number;
-    // 0.20
     serverMessageProbability: number;
     serverMessageRank: number;
-    // 0.10
     communicationProbability: number;
     communicationRank: number;
 }
 
 interface Affinities {
-    user_id: User["id"],
+    user_id: User["id"];
     affinity: number;
+}
+
+interface UserPosition {
+    member: User;
+    affinity: number;
+    x: number;
+    y: number;
+    size: number;
 }
 
 export default definePlugin({
     name: "affinities",
-    description: "Adds a /affinities command to visualize user affinities",
+    description: "Adds a /affinities command to visualize user affinities as a word cloud",
     authors: [
         {
             name: "faf4a",
@@ -67,56 +70,60 @@ export default definePlugin({
             options: [
                 {
                     name: "count",
-                    description: "The amount of users to display",
-                    type: ApplicationCommandOptionType.NUMBER
+                    description: "Number of users to display",
+                    type: ApplicationCommandOptionType.NUMBER,
+                    required: false
                 },
                 {
                     name: "algorithm",
-                    description: "Use the old algorithm (v1) to calculate the affinity",
-                    type: ApplicationCommandOptionType.BOOLEAN
+                    description: "Use the old algorithm (v1) to calculate affinity",
+                    type: ApplicationCommandOptionType.BOOLEAN,
+                    required: false
                 }
             ],
             execute: async (opts, cmdCtx) => {
                 const count = findOption(opts, "count", 25);
-                const useV1 = findOption(opts, "calculate", false);
+                const useV1 = findOption(opts, "algorithm", false);
+
+                if (!count) return sendBotMessage(cmdCtx.channel.id, { content: "The count must be 1 or higher!" });
 
                 try {
-                    const affinities: AffinitiesV2[] | Affinities[] = useV1 ? findStore("UserAffinitiesStore").getUserAffinities() : findStore("UserAffinitiesV2Store").getUserAffinities();
+                    const affinities: AffinitiesV2[] | Affinities[] = useV1
+                        ? findStore("UserAffinitiesStore").getUserAffinities()
+                        : findStore("UserAffinitiesV2Store").getUserAffinities();
 
-                    if (!affinities || affinities.length === 0) {
-                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)." });
+                    if (!affinities?.length) {
+                        return sendBotMessage(cmdCtx.channel.id, {
+                            content: "No affinities found. Check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)."
+                        });
                     }
 
-                    let users = affinities.map(e => {
-                        const user = UserStore.getUser(useV1 ? e.user_id : e.otherUserId);
-                        const affinity = useV1 ? e.affinity : calculateAffinityScore(e);
-                        return {
-                            member: user,
-                            affinity,
-                        };
-                    }).filter(x => x.member?.id);
-
-                    if (users.length === 0) {
-                        return sendBotMessage(cmdCtx.channel.id, { content: "You do not have any affinities, check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)." });
-                    }
-
-                    users = users
+                    const users = affinities
+                        .map(e => ({
+                            member: UserStore.getUser(useV1 ? e.user_id : e.otherUserId),
+                            affinity: useV1 ? e.affinity : calculateAffinityScore(e as AffinitiesV2)
+                        }))
+                        .filter(x => x.member?.id)
                         .sort((a, b) => b.affinity - a.affinity)
                         .slice(0, count);
 
-                    const minAffinity = Math.min(...users.map(u => u.affinity));
-                    const maxAffinity = Math.max(...users.map(u => u.affinity));
-
-                    const minSize = 80;
-                    const maxSize = 160;
-
-                    function getSize(affinity: number): number {
-                        if (maxAffinity === minAffinity) return (minSize + maxSize) / 2;
-                        return minSize + ((affinity - minAffinity) / (maxAffinity - minAffinity)) * (maxSize - minSize);
+                    if (!users.length) {
+                        return sendBotMessage(cmdCtx.channel.id, {
+                            content: "No valid users found in affinities. Check your [privacy settings](<https://support.discord.com/hc/en-us/articles/21864805694999-Data-Used-to-Improve-Discord>)."
+                        });
                     }
 
+                    const minAffinity = Math.min(...users.map(u => u.affinity));
+                    const maxAffinity = Math.max(...users.map(u => u.affinity));
+                    const minSize = 120;
+                    const maxSize = 240;
+
+                    const getSize = (affinity: number): number => {
+                        if (maxAffinity === minAffinity) return (minSize + maxSize) / 2;
+                        return minSize + ((affinity - minAffinity) / (maxAffinity - minAffinity)) * (maxSize - minSize);
+                    };
+
                     const avgSize = (minSize + maxSize) / 2;
-                    logger.log(`${users.length}, ${users.map(x => x.member.username)}`);
                     const { width: canvasWidth, height: canvasHeight } = calculateCanvasSize(users.length, avgSize);
 
                     const canvas = document.createElement("canvas");
@@ -129,25 +136,19 @@ export default definePlugin({
                         const size = getSize(user.affinity);
                         const pos = generatePoissonDiskPosition(positions, canvasWidth, canvasHeight, size);
                         positions.push({ x: pos.x, y: pos.y, size });
-                        return {
-                            ...user,
-                            x: pos.x,
-                            y: pos.y,
-                            size: size
-                        };
-                    }).filter(x => x.member?.id);
+                        return { ...user, x: pos.x, y: pos.y, size };
+                    });
 
                     let loadedImages = 0;
                     const totalImages = userPositions.length;
 
-                    const drawImage = async (user: any) => {
+                    const drawImage = async (user: UserPosition) => {
                         try {
-                            const avatarUrl = user.member?.avatar
-                                ? `https://cdn.discordapp.com/avatars/${user.member?.id}/${user.member?.avatar}.webp?size=256`
-                                : `https://cdn.discordapp.com/embed/avatars/${user.member?.id % 5}.png`;
+                            const avatarUrl = user.member.avatar
+                                ? `https://cdn.discordapp.com/avatars/${user.member.id}/${user.member.avatar}.webp?size=256`
+                                : `https://cdn.discordapp.com/embed/avatars/${user.member.id as any as number % 5}.png`;
 
                             const img = await loadImage(avatarUrl);
-
                             const centerX = user.x + user.size / 2;
                             const centerY = user.y + user.size / 2;
 
@@ -164,37 +165,24 @@ export default definePlugin({
                             ctx.beginPath();
                             ctx.arc(centerX, centerY, user.size / 2 + 1, 0, Math.PI * 2);
                             ctx.stroke();
-
+                        } catch {
+                            // we ignore
+                        } finally {
                             loadedImages++;
-
                             if (loadedImages === totalImages) {
                                 canvas.toBlob(blob => {
-                                    if (!blob) return sendBotMessage(cmdCtx.channel.id, { content: "Couldn't generate the image :c" });
+                                    if (!blob) {
+                                        sendBotMessage(cmdCtx.channel.id, { content: "Couldn't generate the image :c" });
+                                        return;
+                                    }
                                     const file = new File([blob], "affinities-cloud.png", { type: "image/png" });
                                     UploadHandler.promptToUpload([file], cmdCtx.channel, DraftType.ChannelMessage);
                                 }, "image/png");
-                            }
-                        } catch (e: unknown) {
-                            loadedImages++;
-
-                            if (loadedImages === totalImages) {
-                                canvas.toBlob(blob => {
-                                    if (!blob) return sendBotMessage(cmdCtx.channel.id, { content: "Couldn't generate the image :c" });
-                                    const file = new File([blob], "affinities-cloud.png", { type: "image/png" });
-                                    UploadHandler.promptToUpload([file], cmdCtx.channel, DraftType.ChannelMessage);
-                                }, "image/png");
-                            } else {
-                                if (e instanceof Error)
-                                    return sendBotMessage(cmdCtx.channel.id, { content: e.message });
-                                else logger.error(e);
                             }
                         }
                     };
 
-                    userPositions.forEach(user => {
-                        drawImage(user);
-                    });
-
+                    userPositions.forEach(drawImage);
                 } catch (e: unknown) {
                     if (e instanceof Error)
                         sendBotMessage(cmdCtx.channel.id, { content: e.message });
@@ -215,27 +203,24 @@ function calculateAffinityScore(affinity: AffinitiesV2): number {
     };
 
     let score = 0;
-
     if (affinity.isFriend) score += weights.friend * 100;
-    score += (affinity.dmProbability * weights.dm * 100);
-    score += (affinity.vcProbability * weights.vc * 100);
-    score += (affinity.serverMessageProbability * weights.serverMsg * 100);
-    score += (affinity.communicationProbability * weights.communication * 100);
+    score += affinity.dmProbability * weights.dm * 100;
+    score += affinity.vcProbability * weights.vc * 100;
+    score += affinity.serverMessageProbability * weights.serverMsg * 100;
+    score += affinity.communicationProbability * weights.communication * 100;
 
-    score = Math.min(100, Math.max(0, score));
-    return Math.round(score * 100) / 100;
+    return Math.round(Math.min(100, Math.max(0, score)) * 100) / 100;
 }
 
-// stolen from petpet, thanks vee
+// stolen from petpet thanks vee
 function loadImage(source: File | string): Promise<HTMLImageElement> {
     const isFile = source instanceof File;
     const url = isFile ? URL.createObjectURL(source) : source;
 
-    return new Promise<HTMLImageElement>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
-            if (isFile)
-                URL.revokeObjectURL(url);
+            if (isFile) URL.revokeObjectURL(url);
             resolve(img);
         };
         img.onerror = (event, _source, _lineno, _colno, err) => reject(err || event);
@@ -244,7 +229,6 @@ function loadImage(source: File | string): Promise<HTMLImageElement> {
     });
 }
 
-// stolen from random stackoverflow post that taught me how awful canvas ist
 function generatePoissonDiskPosition(
     existingPositions: Array<{ x: number, y: number, size: number; }>,
     canvasWidth: number,
@@ -263,6 +247,7 @@ function generatePoissonDiskPosition(
             y < edgePadding + size / 2 ||
             y > canvasHeight - textSpace - edgePadding - size / 2
         ) return false;
+
         return !existingPositions.some(pos => {
             const dx = pos.x - x;
             const dy = pos.y - y;
@@ -272,7 +257,7 @@ function generatePoissonDiskPosition(
         });
     }
 
-    if (existingPositions.length === 0) {
+    if (!existingPositions.length) {
         return {
             x: canvasWidth / 2 - size / 2,
             y: canvasHeight / 2 - size / 2
@@ -286,18 +271,14 @@ function generatePoissonDiskPosition(
             const radius = minDist + Math.random() * minDist;
             const x = base.x + Math.cos(angle) * radius;
             const y = base.y + Math.sin(angle) * radius;
-            if (isValid(x, y)) {
-                return { x, y };
-            }
+            if (isValid(x, y)) return { x, y };
         }
     }
 
     for (let tries = 0; tries < 100; tries++) {
         const x = Math.random() * (canvasWidth - size - edgePadding * 2) + edgePadding + size / 2;
         const y = Math.random() * (canvasHeight - size - textSpace - edgePadding * 2) + edgePadding + size / 2;
-        if (isValid(x, y)) {
-            return { x, y };
-        }
+        if (isValid(x, y)) return { x, y };
     }
 
     return {
@@ -311,13 +292,12 @@ function calculateCanvasSize(userCount: number, avatarSize: number): { width: nu
     const textSpace = 60;
     const itemWidth = avatarSize + padding;
     const itemHeight = avatarSize + textSpace + padding;
-
     const aspectRatio = 16 / 9;
     const cols = Math.ceil(Math.sqrt(userCount * aspectRatio));
     const rows = Math.ceil(userCount / cols);
 
-    const width = Math.max(1000, cols * itemWidth + padding);
-    const height = Math.max(700, rows * itemHeight + padding);
-
-    return { width, height };
+    return {
+        width: Math.max(1000, cols * itemWidth + padding),
+        height: Math.max(700, rows * itemHeight + padding)
+    };
 }
